@@ -19,6 +19,7 @@ package storage_test
 
 import (
 	"bytes"
+	"fmt"
 	"math/rand"
 	"reflect"
 	"regexp"
@@ -456,6 +457,57 @@ func TestStoreRangeSplitOnConfigs(t *testing.T) {
 		}
 		return reflect.DeepEqual(keys, expKeys)
 	}, 500*time.Millisecond); err != nil {
+		t.Errorf("expected splits not found: %s", err)
+	}
+}
+
+// TestStoreRangeManySplits splits many ranges at once.
+func TestStoreRangeManySplits(t *testing.T) {
+	defer leaktest.AfterTest(t)
+	store, stopper := createTestStore(t)
+	defer stopper.Stop()
+
+	// Write zone configs to trigger the first round of splits.
+	zoneConfig := &proto.ZoneConfig{}
+	b := &client.Batch{}
+	for i := 0; i < 20; i++ {
+		key := proto.Key(fmt.Sprintf("db%02d", 20-i))
+		b.Put(keys.MakeKey(keys.ConfigZonePrefix, key), zoneConfig)
+	}
+	if err := store.DB().Run(b); err != nil {
+		t.Fatal(err)
+	}
+
+	// Check that we finish splitting in allotted time.
+	if err := util.IsTrueWithin(func() bool {
+		rows, err := store.DB().Scan(keys.Meta2Prefix, keys.MetaMax, 0)
+		if err != nil {
+			t.Fatalf("failed to scan meta2 keys: %s", err)
+		}
+		return len(rows) == 24
+	}, 1*time.Second); err != nil {
+		t.Errorf("expected splits not found: %s", err)
+	}
+
+	// Then start the second round of splits.
+	acctConfig := &proto.AcctConfig{}
+	b = &client.Batch{}
+	for i := 0; i < 20; i++ {
+		key := proto.Key(fmt.Sprintf("db%02d/table", 20-i))
+		b.Put(keys.MakeKey(keys.ConfigZonePrefix, key), acctConfig)
+	}
+	if err := store.DB().Run(b); err != nil {
+		t.Fatal(err)
+	}
+
+	// Check the result of splits again.
+	if err := util.IsTrueWithin(func() bool {
+		rows, err := store.DB().Scan(keys.Meta2Prefix, keys.MetaMax, 0)
+		if err != nil {
+			t.Fatalf("failed to scan meta2 keys: %s", err)
+		}
+		return len(rows) == 64
+	}, 1*time.Second); err != nil {
 		t.Errorf("expected splits not found: %s", err)
 	}
 }
