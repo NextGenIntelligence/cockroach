@@ -23,10 +23,14 @@ package security
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"fmt"
 	"io/ioutil"
+	"net/http"
 	"path"
+	"strings"
 
 	"github.com/cockroachdb/cockroach/util"
+	"github.com/docker/machine/log"
 )
 
 const (
@@ -93,7 +97,7 @@ func LoadTLSConfig(certPEM, keyPEM, caPEM []byte) (*tls.Config, error) {
 		// TODO(marc): no client certs for now. Even specifying VerifyClientCertIfGiven
 		// causes issues with various browsers. We should switch to
 		// tls.RequireAndVerifyClientCert once client certs are properly set.
-		ClientAuth: tls.NoClientCert,
+		ClientAuth: tls.VerifyClientCertIfGiven,
 		RootCAs:    certPool,
 		ClientCAs:  certPool,
 
@@ -149,4 +153,26 @@ func LoadInsecureClientTLSConfig() *tls.Config {
 	return &tls.Config{
 		InsecureSkipVerify: true,
 	}
+}
+
+// LogRequestCertificates
+func LogRequestCertificates(r *http.Request) {
+	if r.TLS == nil {
+		log.Infof("%s %s: no TLS", r.Method, r.URL)
+		return
+	}
+
+	peerCerts := []string{}
+	verifiedChain := []string{}
+	for _, cert := range r.TLS.PeerCertificates {
+		peerCerts = append(peerCerts, fmt.Sprintf("%s (%s, %s)", cert.Subject.CommonName, cert.DNSNames, cert.IPAddresses))
+	}
+	for _, chain := range r.TLS.VerifiedChains {
+		subjects := []string{}
+		for _, cert := range chain {
+			subjects = append(subjects, cert.Subject.CommonName)
+		}
+		verifiedChain = append(verifiedChain, strings.Join(subjects, ","))
+	}
+	log.Infof("%s %s: peer certs: %v, chain: %v", r.Method, r.URL, peerCerts, verifiedChain)
 }
